@@ -85,7 +85,7 @@ profiles:
           choice: 1
         - section: CTGP Classic v4
           option: My Stuff
-          choice: 1
+          choice: 3
 
   optpack:
     requires_game_id: RMCP01
@@ -98,5 +98,12 @@ profiles:
     output: build/mods/optpack_full_cpp
     riivolution:
       xml: ../Riivolution/optpack.xml
-      options:
+      options: 
+        - selection: Optpack
+          option: Optpack Core
+          choice: 1
+        - section: Optpack
+          option: My Stuff Modifications
+          choice: 1
+        
     
