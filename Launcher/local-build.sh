@@ -65,6 +65,7 @@ translator_dll_override=""
 translator_bin_override=""
 fuse_ld_override=""
 native_prebuilt_dir=""
+sysroot=""
 
 usage() {
     cat <<'EOF'
@@ -87,6 +88,8 @@ Usage: local-build.sh --output-dir DIR [options]
   --translator-bin PATH           Self-contained Translator.Cli executable (skips building AND needs no dotnet at all)
   --native-prebuilt-dir DIR       Precompiled aurora/third-party package (see Prepare-NativePrebuilt.sh);
                                    skips compiling aurora-main from source entirely
+  --sysroot PATH                   Passed to CMake as -DCMAKE_SYSROOT: where the compiler resolves
+                                   standard headers/startup files
 EOF
 }
 
@@ -110,6 +113,7 @@ while [[ $# -gt 0 ]]; do
         --translator-dll) translator_dll_override=$2; shift 2 ;;
         --translator-bin) translator_bin_override=$2; shift 2 ;;
         --native-prebuilt-dir) native_prebuilt_dir=$2; shift 2 ;;
+        --sysroot) sysroot=$2; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) fail "unknown argument: $1" ;;
     esac
@@ -185,6 +189,30 @@ retro_root=${retro_rewind_package_dir:-$workspace/PulsarPacks/completed/RetroRew
 assert_file "$project" "Translation project"
 assert_file "$assets/main.dol" "Extracted main.dol (see translator/README.md - owning the game is required)"
 assert_file "$assets/StaticR.rel" "Extracted StaticR.rel (see translator/README.md - owning the game is required)"
+
+# The AppImage bundles Clang, but Linux startup objects and the C/C++ link runtimes
+# still come from the host. Check them before the expensive translation so a missing
+# development package produces a useful error instead of CMake's generic exit 1.
+link_probe_dir=$(mktemp -d)
+link_probe_flags=()
+[[ -z "$sysroot" ]] || link_probe_flags+=(--sysroot="$sysroot")
+[[ -z "$fuse_ld_override" ]] || link_probe_flags+=(-fuse-ld="$fuse_ld_override")
+printf 'int main(void) { return 0; }\n' > "$link_probe_dir/probe.c"
+cat > "$link_probe_dir/probe.cpp" <<'EOF'
+#include <vector>
+int main() { std::vector<int> values{1}; return values.front() - 1; }
+EOF
+if ! "$cc_bin" "${link_probe_flags[@]}" "$link_probe_dir/probe.c" -o "$link_probe_dir/probe-c" > "$link_probe_dir/error" 2>&1; then
+    cat "$link_probe_dir/error" >&2
+    rm -rf "$link_probe_dir"
+    fail "The C compiler cannot link a test program. Linux needs C development files (glibc startup objects and a compiler runtime) in addition to bundled Clang. Install your distribution's development packages, or on SteamOS run WiiCompiled through the Wheel Wizard Flatpak."
+fi
+if ! "$cxx_bin" "${link_probe_flags[@]}" "$link_probe_dir/probe.cpp" -o "$link_probe_dir/probe-cxx" > "$link_probe_dir/error" 2>&1; then
+    cat "$link_probe_dir/error" >&2
+    rm -rf "$link_probe_dir"
+    fail "The C++ compiler cannot link a test program. Install your distribution's C++ development packages, or on SteamOS run WiiCompiled through the Wheel Wizard Flatpak."
+fi
+rm -rf "$link_probe_dir"
 
 # Literal line matching against the manifest's fixed shape, not a YAML dependency - the same
 # approach NativeBuildFlags.ps1's Get-MkwProjectPins uses on Windows, kept here only for the one
@@ -414,6 +442,14 @@ fi
 if [[ -n "$native_prebuilt_dir" ]]; then
     configure_args+=(-DMKW_NATIVE_PREBUILT_DIR="$native_prebuilt_dir")
 fi
+if [[ -n "$sysroot" ]]; then
+    configure_args+=(-DCMAKE_SYSROOT="$sysroot")
+else
+    # Explicitly clear any cached CMAKE_SYSROOT from a prior configure so an
+    # incremental build that transitions from one sysroot to none does not
+    # silently keep the stale cached path.
+    configure_args+=(-UCMAKE_SYSROOT)
+fi
 
 log_step configure-native "Configuring the native toolchain"
 "$cmake_bin" "${configure_args[@]}"
@@ -445,7 +481,9 @@ publish_built_product() {
     local exe=$build/$target
     assert_file "$exe" "Locally compiled game executable"
     cp -f "$exe" "$destination/$target"
-    for name in dsp_coef.bin initial_pipeline_cache.db; do
+    # cacert.pem is the TLS root bundle the mbed TLS path looks up beside the executable
+    # (runtime/src/hle/net/network_ssl.cpp); without it HTTPS fails at runtime.
+    for name in dsp_coef.bin initial_pipeline_cache.db cacert.pem; do
         [[ -f "$build/$name" ]] && cp -f "$build/$name" "$destination/"
     done
     [[ -d "$build/wii_bootstrap" ]] && cp -rf "$build/wii_bootstrap" "$destination/"

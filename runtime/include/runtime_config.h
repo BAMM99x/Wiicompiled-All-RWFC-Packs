@@ -33,6 +33,7 @@
 
 struct RuntimeUserConfig {
     std::optional<bool> widescreen;
+    std::optional<bool> forceAspect169;
     std::optional<int32_t> windowPosX;
     std::optional<int32_t> windowPosY;
     std::optional<uint32_t> windowWidth;
@@ -91,6 +92,7 @@ struct RuntimeUserConfig {
     // "dpad_up,left_shoulder") as values; pressing either bound button counts.
     std::array<std::optional<std::string>, 12> controllerButtons;
     std::optional<bool> rumbleEnabled;
+    std::optional<int32_t> muteHotkey;
     std::map<std::string, std::string> controllerExpressions;
 };
 
@@ -297,6 +299,7 @@ inline void EnsureConfigFile() {
               "# Set paths.dvd_root to an extracted Mario Kart Wii DATA directory.\n\n"
               "[video]\n"
               "widescreen = true\n"
+              "force_16_9 = false\n"
               "resolution_multiplier = 1.0\n"
               "frame_interpolation_fps = 0\n"
               "display_mode = \"windowed\"\n"
@@ -411,6 +414,9 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     }
 
     config.rumbleEnabled = FindConfigValue<bool>(document, "controller", "rumble");
+    if (auto value = FindConfigInt(document, "audio", "mute_key")) {
+        config.muteHotkey = *value;
+    }
 
     if (const auto* section = document.contains("controller") ? &document.at("controller") : nullptr;
         section != nullptr && section->is_table()) {
@@ -422,6 +428,7 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     }
 
     config.widescreen = FindConfigValue<bool>(document, "video", "widescreen");
+    config.forceAspect169 = FindConfigValue<bool>(document, "video", "force_16_9");
     config.windowPosX = FindConfigInt(document, "video", "window_x");
     config.windowPosY = FindConfigInt(document, "video", "window_y");
     if (auto value = FindConfigUint(document, "video", "window_width"); value && *value != 0) {
@@ -710,6 +717,15 @@ inline bool SetRumbleEnabled(bool value) {
     return WriteSetting("controller", "rumble", value ? "true" : "false");
 }
 
+inline int32_t MuteHotkey(int32_t fallback) {
+    return Get().muteHotkey.value_or(fallback);
+}
+
+inline bool SetMuteHotkey(int32_t value) {
+    Mutable().muteHotkey = value;
+    return WriteSetting("audio", "mute_key", std::to_string(value));
+}
+
 inline bool SetAudioVolume(float value) {
     value = std::clamp(value, 0.0f, 1.0f);
     Mutable().audioVolume = value;
@@ -767,6 +783,15 @@ inline bool SetAttenuateMusicWhenMediaPlays(bool value) {
 
 inline bool WidescreenEnabled(bool fallback = false) {
     return Get().widescreen.value_or(fallback);
+}
+
+inline bool ForceAspect169Enabled(bool fallback = false) {
+    return Get().forceAspect169.value_or(fallback);
+}
+
+inline bool SetForceAspect169(bool value) {
+    Mutable().forceAspect169 = value;
+    return WriteSetting("video", "force_16_9", value ? "true" : "false");
 }
 
 inline bool WindowPosition(int32_t& x, int32_t& y) {
